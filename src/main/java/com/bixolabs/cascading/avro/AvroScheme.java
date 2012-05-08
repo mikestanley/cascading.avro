@@ -1,6 +1,6 @@
 /**
  * Copyright 2010 TransPac Software, Inc.
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -24,7 +24,9 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.ListIterator;
 import java.util.Map;
+import java.util.Date;
 
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -42,6 +44,7 @@ import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputCollector;
+import org.apache.hadoop.mapred.FileOutputFormat;
 import org.apache.log4j.Logger;
 
 import cascading.scheme.Scheme;
@@ -62,8 +65,8 @@ public class AvroScheme extends Scheme {
     /**
      * Helper class used to save an Enum name in a type that Avro requires for
      * serialization.
-     * 
-     */
+     *
+     *
     private static class CascadingEnumSymbol implements GenericEnumSymbol {
 
         private String _name;
@@ -77,11 +80,17 @@ public class AvroScheme extends Scheme {
             return _name;
         }
     }
+    */
 
     private static final Logger LOGGER = Logger.getLogger(AvroScheme.class);
     private static final String RECORD_NAME = "CascadingAvroSchema";
+    private static final String OUTPUT_CODEC = "null";
+
     private String _recordName = RECORD_NAME;
+    private String _outputCodec = OUTPUT_CODEC;
+
     private Fields _schemeFields;
+    private Map<String,String> _avroFieldNames;
     private Class<?>[] _schemeTypes;
     private HashMap<Class<?>, Schema.Type> _typeMap = createTypeMap();
 
@@ -94,6 +103,28 @@ public class AvroScheme extends Scheme {
 
         _schemeFields = schemeFields;
         _schemeTypes = schemeTypes;
+        _avroFieldNames = new HashMap<String,String>();
+        Iterator<?> iter = schemeFields.iterator();
+        while (iter.hasNext()) {
+            String fieldName = iter.next().toString();
+            _avroFieldNames.put(fieldName, fieldName);
+        }
+    }
+
+    public AvroScheme(Fields schemeFields, Class<?>[] schemeTypes, List<String> avroFieldNames) {
+        super(schemeFields, schemeFields);
+
+        validateFields(schemeFields, schemeTypes);
+
+        _schemeFields = schemeFields;
+        _schemeTypes = schemeTypes;
+        _avroFieldNames = new HashMap<String,String>();
+        ListIterator<?> iter = avroFieldNames.listIterator();
+        while (iter.hasNext()) {
+            String tupleName = schemeFields.get(iter.nextIndex()).toString();
+            String fieldName = iter.next().toString();;
+            _avroFieldNames.put(tupleName, fieldName);
+        }
     }
 
     @SuppressWarnings( { "deprecation" })
@@ -116,6 +147,8 @@ public class AvroScheme extends Scheme {
     @Override
     public void sinkInit(Tap tap, JobConf conf) throws IOException {
         conf.set(AvroJob.OUTPUT_SCHEMA, getSchema().toString());
+        FileOutputFormat.setCompressOutput(conf, true);
+        conf.set(AvroJob.OUTPUT_CODEC, _outputCodec);
         conf.setOutputFormat(AvroOutputFormat.class);
 
         // Since we're outputting to Avro, we need to set up output values.
@@ -155,7 +188,7 @@ public class AvroScheme extends Scheme {
         GenericData.Record datum = wrapper.datum();
         for (int fieldIndex = 0, typeIndex = 0; fieldIndex < sourceFields.size(); fieldIndex++, typeIndex++) {
             Class<?> curType = _schemeTypes[typeIndex];
-            String fieldName = sourceFields.get(fieldIndex).toString();
+            String fieldName = _avroFieldNames.get(sourceFields.get(fieldIndex).toString());
             Object inObj = datum.get(fieldName);
             if (curType == ARRAY_CLASS) {
                 typeIndex++;
@@ -182,7 +215,7 @@ public class AvroScheme extends Scheme {
         GenericData.Record datum = new GenericData.Record(getSchema());
         for (int fieldIndex = 0, typeIndex = 0; fieldIndex < sinkFields.size(); fieldIndex++, typeIndex++) {
 
-            String fieldName = sinkFields.get(fieldIndex).toString();
+            String fieldName = _avroFieldNames.get(sinkFields.get(fieldIndex).toString());
             Class<?> curType = _schemeTypes[typeIndex];
             if (curType == ARRAY_CLASS) {
                 typeIndex++;
@@ -203,7 +236,7 @@ public class AvroScheme extends Scheme {
      * Set the record name to be used when generating the Avro Schema. If there
      * are nested records, then the depth is added to the name (e.g. FooBar,
      * FooBar1...)
-     * 
+     *
      * @param recordName
      */
     public void setRecordName(String recordName) {
@@ -211,7 +244,16 @@ public class AvroScheme extends Scheme {
     }
 
     /**
-     * 
+     * Set the output code to be used when generating the Avro Schema.  Defaults to null.
+     *
+     * @param outputCodec
+     */
+    public void setOutputCodec(String outputCodec) {
+        _outputCodec = outputCodec;
+    }
+
+    /**
+     *
      * @return the JSON representation of the Avro schema that will be generated
      */
     public String getJsonSchema() {
@@ -240,12 +282,14 @@ public class AvroScheme extends Scheme {
 
         List<Schema.Field> fields = new ArrayList<Schema.Field>();
         for (int typeIndex = 0, fieldIndex = 0; typeIndex < schemeTypes.length; typeIndex++, fieldIndex++) {
-            String fieldName = schemeFields.get(fieldIndex).toString();
+            String tupleName = schemeFields.get(fieldIndex).toString();
+            String fieldName = _avroFieldNames.get(tupleName);
             Class<?>[] subSchemeTypes = new Class[2]; // at most 2, since we
                                                       // only allow primitive
                                                       // types for arrays and
                                                       // maps
             subSchemeTypes[0] = schemeTypes[typeIndex];
+            final Class<?> schemeType = schemeTypes[typeIndex];
             if ((schemeTypes[typeIndex] == ARRAY_CLASS) || (schemeTypes[typeIndex] == MAP_CLASS)) {
                 typeIndex++;
                 subSchemeTypes[1] = schemeTypes[typeIndex];
@@ -255,12 +299,17 @@ public class AvroScheme extends Scheme {
             final Schema nullSchema = Schema.create(Schema.Type.NULL);
             List<Schema> schemas = new LinkedList<Schema>() {
                 {
-                    add(nullSchema);
+                    if (!((schemeType == MAP_CLASS) || (schemeType.isEnum())))
+                        add(nullSchema);
                     add(schema);
                 }
             };
 
-            fields.add(new Schema.Field(fieldName, Schema.createUnion(schemas), "", null));
+            if (schemas.size() > 1) {
+                fields.add(new Schema.Field(fieldName, Schema.createUnion(schemas), "", null));
+            } else {
+                fields.add(new Schema.Field(fieldName, schemas.get(0), "", null));
+            }
         }
 
         // Avro doesn't like anonymous records - so create a named one.
@@ -318,6 +367,10 @@ public class AvroScheme extends Scheme {
             return result;
         } else if (inType.isEnum()) {
             return inObj.toString();
+        } else if (inType == Date.class) {
+            Date inDate = new Date();
+            inDate.setTime((Long)inObj);
+            return inDate;
         } else {
             return inObj;
         }
@@ -368,8 +421,12 @@ public class AvroScheme extends Scheme {
             ByteBuffer convertedObj = ByteBuffer.wrap(bw.getBytes(), 0, bw.getLength());
             return convertedObj;
         } else if (curType.isEnum()) {
-            Object result = new CascadingEnumSymbol((String) inObj);
+            Object result = new GenericData.EnumSymbol(getSchema(), (String) inObj);
+            // Object result = new CascadingEnumSymbol((String) inObj);
             return result;
+        } else if (curType == Date.class) {
+            Long convertedObj = new Long(((Date)inObj).getTime());
+            return convertedObj;
         } else {
             return inObj;
         }
@@ -432,6 +489,9 @@ public class AvroScheme extends Scheme {
         typeMap.put(String.class, Schema.Type.STRING);
         typeMap.put(BytesWritable.class, Schema.Type.BYTES);
 
+        // we'll convert Dates to Longs representing milliseconds since epoc
+        typeMap.put(Date.class, Schema.Type.LONG);
+
         // Note : Cascading field type for Array and Map is really a Tuple
         typeMap.put(ARRAY_CLASS, Schema.Type.ARRAY);
         typeMap.put(MAP_CLASS, Schema.Type.MAP);
@@ -478,7 +538,7 @@ public class AvroScheme extends Scheme {
         // only primitive types are allowed for arrays
 
         if (arrayType == Boolean.class || arrayType == Integer.class || arrayType == Long.class || arrayType == Float.class || arrayType == Double.class || arrayType == String.class
-                        || arrayType == BytesWritable.class)
+                        || arrayType == BytesWritable.class || arrayType == Date.class)
             return true;
 
         return false;

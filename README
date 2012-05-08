@@ -1,4 +1,56 @@
 ===============================
+Fork Changes
+===============================
+
+This was a quick fork to make cascading.avro do what I needed for use within
+Cascalog.   This is a pretty quick and dirty fork to fit my immediate needs.
+
+
+1. Added a new constructor to AvroSchema (cascadingFields, schemaTypes, avroFieldNames)
+   where cascadingFields == cascading tuple field names and avroFieldNames will equal
+   the avro field names.  cascalog uses prefixes such as "?" on tuple names, which are
+   illegal in avro.  The alias approach was a quick way to work around this (but the
+   three list/array inputs would probably be best as a list of maps or objects
+   providing field settings (tuple name, type, avro field name, etc.)
+
+2. Updated to Avro 1.6.3.  This had some interesting effects though.  The newer
+   Avro no longer supports nested Enums, so I needed to split out the test.  I also
+   ran into trouble with nullSchema and Map and Enum fields.  So these are no longer
+   "optional" if used.  Didn't impact me, but it may impact others, so just be aware of
+   it.  Some of the tests were adjusted because of this..
+
+3. I added support for codec.  avro.codec is now always written to the avro file
+   (while optional, some utilities like avro-c's avrocat, failed to read files without
+   an avro.codec metadata property in the container).  Now avro.codec is always written
+   even if nil codec.  Hadoop FileOutputFormat.setCompresseOutput is also set to true
+   otherwise avro.codec won't be written.   With this change, I've been able to write
+   files with deflate codec as well.
+
+4. I added automatic conversion to/from Date fields.  If the schemaType is a
+   Date.class, it will be written to avro files as a long (getTime) and converted
+   to a Date when read back in.   This was especially handy when working with
+   cascading db-migrate source and writing to avro sinks.  Given enough time though,
+   I'd revisit how conversion is handled for "fields" to/from avro files (find an
+   approach more extensible than arrays of types and standard conversion routines).
+
+5. I wasn't sure what etiquette dictated when forking a Maven packaged project, so
+   I modified the POM slightly.  incremented the version to 1.1, and changed the group
+   from com.bixolabs to org.mikestanley.  I did not change any Java package structure
+   or anything like that though.   I haven't pushed this into any central repository
+   so you will need to install it locally (ant install) to use it in your projects.
+   I don't plan on maintaining this as a fork though and will be sending a pull
+   request.
+
+
+If you have any questions i suppose contact me through github.
+
+Cheers,
+...Mike
+
+
+
+
+===============================
 Introduction
 ===============================
 
@@ -33,7 +85,7 @@ The set of supported types, with the corresponding Avro type, is:
 	List.class, Schema.Type.ARRAY
 	Map.class, Schema.Type.MAP
 	Enum.class, Schema.Type.ENUM
-	
+
 See below for how the List, Map and Enum types are actually represented in a Tuple as a
 nested Tuple.
 
@@ -44,9 +96,9 @@ Example
 	final Fields cascadingFields = new Fields("id", "timestamp", "statusMsg", "content");
 	final Class<?>[] schemeTypes = {Integer.class, Long.class, String.class, BytesWritable.class};
 	Tap avroSource = new Hfs(new AvroScheme(cascadingFields, schemeTypes), "outputdir");
-  
+
   	...hook up your Cascading workflow here...
-  	
+
 ===============================
 Limitations
 ===============================
