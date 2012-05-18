@@ -414,7 +414,12 @@ public class AvroScheme extends Scheme {
         if (inObj == null) {
             return null;
         } else if (curType == String.class) {
-            Utf8 convertedObj = new Utf8((String) inObj);
+            Utf8 convertedObj = null;
+            if (inObj.getClass() == String.class) {
+                convertedObj = new Utf8((String) inObj);
+            } else {
+                convertedObj = new Utf8(inObj.toString());
+            }
             return convertedObj;
         } else if (curType == BytesWritable.class) {
             BytesWritable bw = (BytesWritable) inObj;
